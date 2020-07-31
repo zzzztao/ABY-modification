@@ -128,8 +128,8 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 
 	
 	mpz_t c[packshares];
-	mpz_t a1[packshares];
-	mpz_t b1[packshares];
+	//mpz_t a1[packshares];
+	//mpz_t b1[packshares];
 	//mpz_t c1[packshares];
 
 	mpz_t X[packshares];
@@ -141,7 +141,7 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 	mpz_t V[packshares];
 
 	for (uint32_t i = 0; i < packshares; i++) {
-		mpz_inits(c[i], a1[i], b1[i],  U[i], V[i], X[i], Y[i], NULL);
+		mpz_inits(c[i], U[i], V[i], X[i], Y[i], NULL);
 	}
 
 	BYTE * rbuf = (BYTE*) calloc(packshares * shareBytes, 1);
@@ -239,18 +239,18 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 	offset = 0;
 	for(uint32_t i = 0; i < numMTs; i++) {
 		//取值初始化向量Y（a1b1，a1，b1，1,c1）
-		mpz_import(a1[i], 1, 1, shareBytes, 0, 0, bA1 + offset);
-		mpz_import(b1[i], 1, 1, shareBytes, 0, 0, bB1 + offset);
+		mpz_import(x, 1, 1, shareBytes, 0, 0, bA1 + offset);
+		mpz_import(y, 1, 1, shareBytes, 0, 0, bB1 + offset);
 
 		mpz_set_ui (z, rand(random));
 		mpz_mod_2exp(z, z, m_nShareBitLength);
 		//mpz_set(c1[i], z);  
 		mpz_export(bC1 + offset, NULL, 1, shareBytes, 0, 0, z);
 
-		mpz_mul(y1, a1[i], b1[i]);
+		mpz_mul(y1, x, y);
 		mpz_mod_2exp(y1, y1, m_nShareBitLength);
-		mpz_set(y2, a1[i]);
-		mpz_set(y3, b1[i]);
+		mpz_set(y2, x);
+		mpz_set(y3, y);
 		mpz_set_ui(y4, 1);
 		mpz_mod_2exp(y4, y4, m_nShareBitLength);
 		mpz_set(y5, z);
@@ -261,7 +261,7 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 		mpz_set(Y[i*5+3], y4);
 		mpz_set(Y[i*5+4], y5);
 
-		//std::cout << "A1  " << a1[i] << "B1: " << b1[i] << "C1: " << z  << std::endl;
+		//std::cout << "A1  " << x << "B1: " << y << "C1: " << z  << std::endl;
 		//send_out  << "A1  " << a1[i] << "B1: " << b1[i] << "C1: " << z  << std::endl;
 
 		offset += shareBytes;
@@ -458,7 +458,7 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 
 //clean up after ourselves
 	for (uint32_t i = 0; i < packshares; i++) {
-		mpz_clears(c[i], a1[i], b1[i], U[i], V[i], X[i], Y[i],  NULL);
+		mpz_clears(c[i], U[i], V[i], X[i], Y[i],  NULL);
 	}
 
 	mpz_clears(r, x, y, z, w, rr, u, v, mod, NULL);
