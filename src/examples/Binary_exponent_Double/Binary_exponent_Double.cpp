@@ -74,7 +74,7 @@ int32_t Binary_exponent(e_role role, const std::string& address, uint16_t port, 
 
 	party->ExecCircuit();	
 	
-	uint32_t dp = s_dp->get_clear_value<uint32_t>();
+	uint64_t dp = s_dp->get_clear_value<uint64_t>();
 
 	party->Reset();
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

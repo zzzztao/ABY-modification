@@ -1,0 +1,3 @@
+
+add_executable(Binary_exponent_Double Binary_exponent_Double.cpp)
+target_link_libraries(Binary_exponent_Double ABY::aby ENCRYPTO_utils::encrypto_utils)
