@@ -70,7 +70,7 @@ ABYParty::ABYParty(e_role pid, const std::string& addr, uint16_t port, seclvl se
 	m_eMTGenAlg(mg_algo), m_eRole(pid), m_nNumOTThreads(nthreads),
 	m_tComm(std::make_unique<comm_ctx>()),
 	m_pSetup(std::make_unique<ABYSetup>(m_cCrypt.get(), m_nNumOTThreads, m_eRole, m_eMTGenAlg)),
-	m_nPort(port), m_sSecLvl(seclvl),
+	m_nPort(port), m_sSecLvl(seclvl),	
 	m_cAddress(addr) {
 
 	StartWatch("Initialization", P_INIT);
@@ -327,6 +327,7 @@ BOOL ABYParty::EvaluateCircuit() {
 	}
 
 	uint32_t maxdepth = 0;
+
 
 	for (uint32_t i = 0; i < m_vSharings.size(); i++) {
 		maxdepth = std::max(maxdepth, m_vSharings[i]->GetMaxCommunicationRounds());

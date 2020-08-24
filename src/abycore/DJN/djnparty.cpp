@@ -88,13 +88,250 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 	struct timespec start, end;
 	numMTs = ceil_divide(numMTs, 2); // We can be both sender and receiver at the same time.
 
+	uint32_t maxShareBitLength = 2 * m_nShareBitLength + 41; // length of one share in the packet, sigma = 40
+	uint32_t packshares = m_nDJNModulusBits / maxShareBitLength; // number of shares in one packet
+	uint32_t numpacks = ceil_divide(numMTs, packshares); // total number of packets to send in order to generate numMTs
+
+	uint32_t shareBytes = m_nShareBitLength / 8;
+	uint32_t offset = 0;
+	uint32_t limit = packshares; // upper bound for a package shares, used to handle non-full last packages / alignment
+
+#if DJN_DEBUG
+	std::cout << "DJNModulusBits: " << m_nDJNModulusBits << " ShareBitLength: " << m_nShareBitLength << " packlen: " << maxShareBitLength << " numshares: " << packshares << " numpacks: " << numpacks << std::endl;
+#endif
+
+	mpz_t r, x, y, z;
+	mpz_inits(r, x, y, z, NULL);
+
+	// shares for server part
+	mpz_t a[packshares];
+	mpz_t b[packshares];
+	mpz_t c[packshares];
+
+	// shares for client part
+	mpz_t a1[packshares];
+	mpz_t b1[packshares];
+	mpz_t c1[packshares];
+
+	for (uint32_t i = 0; i < packshares; i++) {
+		mpz_inits(a[i], b[i], c[i], a1[i], b1[i], c1[i], NULL);
+	}
+
+	//allocate buffers for mpz_t ciphertext #numMTs with m_nBuflen
+	BYTE * abuf = (BYTE*) calloc(numMTs * m_nBuflen, 1);
+	BYTE * bbuf = (BYTE*) calloc(numMTs * m_nBuflen, 1);
+	BYTE * zbuf = (BYTE*) calloc(numpacks * m_nBuflen, 1);
+
+	clock_gettime(CLOCK_MONOTONIC, &start);
+
+	// read server a,b shares and encrypt them into buffer
+	for (uint32_t i = 0; i < numMTs; i++) {
+		mpz_import(x, 1, 1, shareBytes, 0, 0, bA + i * shareBytes);
+		mpz_import(y, 1, 1, shareBytes, 0, 0, bB + i * shareBytes);
+
+		djn_encrypt_crt(r, m_localpub, m_prv, x);
+		mpz_export(abuf + i * m_nBuflen, NULL, -1, 1, 1, 0, r);
+		djn_encrypt_crt(z, m_localpub, m_prv, y);
+		mpz_export(bbuf + i * m_nBuflen, NULL, -1, 1, 1, 0, z);
+
+	}
+
+	// send & receive encrypted values
+	int window = DJN_WINDOWSIZE;
+	int tosend = m_nBuflen * numMTs;
+	offset = 0;
+
+	while (tosend > 0) {
+
+		window = std::min(window, tosend);
+
+		chan->send(abuf + offset, window);
+		chan->blocking_receive(abuf + offset, window);
+
+		chan->send(bbuf + offset, window);
+		chan->blocking_receive(bbuf + offset, window);
+
+		tosend -= window;
+		offset += window;
+	}
+
+	// ----------------#############   ###############-----------------------
+	// pack ALL the packets
+
+	offset = 0;
+	for (uint32_t i = 0; i < numpacks; i++) {
+
+		if (i == numpacks - 1) {
+			limit = numMTs % packshares; // if last package, only fill buffers to requested size and discard remaining shares
+		}
+
+		//read shares from client byte arrays
+		for (uint32_t j = 0; j < limit; j++) {
+			mpz_import(a1[j], 1, 1, shareBytes, 0, 0, bA1 + offset);
+			mpz_import(b1[j], 1, 1, shareBytes, 0, 0, bB1 + offset);
+
+			mpz_import(x, m_nBuflen, -1, 1, 1, 0, abuf + (j + i * packshares) * m_nBuflen);
+			mpz_import(y, m_nBuflen, -1, 1, 1, 0, bbuf + (j + i * packshares) * m_nBuflen);
+
+			dbpowmod(c1[j], x, b1[j], y, a1[j], m_remotepub->n_squared); //double base exponentiation
+			offset += shareBytes;
+		}
+
+		// horner packing of shares into 1 ciphertext
+		mpz_set(z, c1[limit - 1]);
+		mpz_set_ui(y, 0);
+		mpz_setbit(y, maxShareBitLength); // y = 2^ShareBitLength, for shifting ciphertext
+
+		for (int j = limit - 2; j >= 0; j--) {
+			mpz_powm(z, z, y, m_remotepub->n_squared);
+			mpz_mul(z, z, c1[j]);
+			mpz_mod(z, z, m_remotepub->n_squared);
+		}
+
+		// pick random r for masking
+		aby_prng(x, mpz_sizeinbase(m_remotepub->n, 2) + 128);
+		mpz_mod(x, x, m_remotepub->n);
+
+		djn_encrypt_fb(y, m_remotepub, x);
+
+		// "add" encrypted r and add to buffer
+		mpz_mul(z, z, y);
+		mpz_mod(z, z, m_remotepub->n_squared);
+
+		mpz_export(zbuf + i * m_nBuflen, NULL, -1, 1, 1, 0, z); // TODO maybe reuse abuf, but make sure it's cleaned properly
+
+		offset -= shareBytes * limit;
+
+		// calculate c shares for client part
+		for (uint32_t j = 0; j < limit; j++) {
+			mpz_mod_2exp(y, x, m_nShareBitLength); // y = r mod 2^ShareBitLength == read the share from least significant bits
+			mpz_div_2exp(x, x, maxShareBitLength); // r = r >> maxShareBitLength
+
+			mpz_mul(c1[j], a1[j], b1[j]); //c = a * b
+			mpz_sub(c1[j], c1[j], y); // c = c - y
+
+			mpz_mod_2exp(c1[j], c1[j], m_nShareBitLength); // c = c mod 2^ShareBitLength
+			mpz_export(bC1 + offset, NULL, 1, shareBytes, 0, 0, c1[j]);
+
+			offset += shareBytes;
+		}
+	}
+
+	// ----------------#############   ###############-----------------------
+	// all packets packed. exchange these packets
+
+	window = DJN_WINDOWSIZE;
+	tosend = m_nBuflen * numpacks;
+	offset = 0;
+
+	while (tosend > 0) {
+		window = std::min(window, tosend);
+
+		chan->send(zbuf + offset, window);
+		chan->blocking_receive(zbuf + offset, window);
+
+		tosend -= window;
+		offset += window;
+	}
+
+	//unpack and calculate server c shares
+	limit = packshares;
+	offset = 0;
+
+	for (uint32_t i = 0; i < numpacks; i++) {
+
+		if (i == numpacks - 1) {
+			limit = numMTs % packshares; // if last package, only fill buffers to requested size and discard remaining shares
+		}
+
+		mpz_import(r, m_nBuflen, -1, 1, 1, 0, zbuf + i * m_nBuflen);
+
+		djn_decrypt(r, m_localpub, m_prv, r);
+
+		for (uint32_t j = 0; j < limit; j++) {
+			mpz_import(a[j], 1, 1, shareBytes, 0, 0, bA + offset);
+			mpz_import(b[j], 1, 1, shareBytes, 0, 0, bB + offset);
+
+			mpz_mod_2exp(c[j], r, m_nShareBitLength); // c = x mod 2^ShareBitLength == read the share from least significant bits
+			mpz_div_2exp(r, r, maxShareBitLength); // x = x >> maxShareBitLength
+			mpz_addmul(c[j], a[j], b[j]); //c = a*b + c
+			mpz_mod_2exp(c[j], c[j], m_nShareBitLength); // c = c mod 2^ShareBitLength
+			mpz_export(bC + offset, NULL, 1, shareBytes, 0, 0, c[j]);
+			offset += shareBytes;
+		}
+	}
+
+#if DJN_CHECKMT
+	std::cout << "Checking MT validity with values from other party:" << std::endl;
+
+	mpz_t ai, bi, ci, ai1, bi1, ci1, ta, tb;
+	mpz_inits(ai, bi, ci, ai1, bi1, ci1, ta, tb, NULL);
+
+	chan->send(bA, numMTs * shareBytes);
+	chan->blocking_receive(bA, numMTs * shareBytes);
+	chan->send(bB, numMTs * shareBytes);
+	chan->blocking_receive(bB, numMTs * shareBytes);
+	chan->send(bC, numMTs * shareBytes);
+	chan->blocking_receive(bC, numMTs * shareBytes);
+
+	for (uint32_t i = 0; i < numMTs; i++) {
+
+		mpz_import(ai, 1, 1, shareBytes, 0, 0, bA + i * shareBytes);
+		mpz_import(bi, 1, 1, shareBytes, 0, 0, bB + i * shareBytes);
+		mpz_import(ci, 1, 1, shareBytes, 0, 0, bC + i * shareBytes);
+
+		mpz_import(ai1, 1, 1, shareBytes, 0, 0, bA1 + i * shareBytes);
+		mpz_import(bi1, 1, 1, shareBytes, 0, 0, bB1 + i * shareBytes);
+		mpz_import(ci1, 1, 1, shareBytes, 0, 0, bC1 + i * shareBytes);
+
+		mpz_add(ta, ai, ai1);
+		mpz_add(tb, bi, bi1);
+		mpz_mul(ta, ta, tb);
+		mpz_add(tb, ci, ci1);
+		mpz_mod_2exp(ta, ta, m_nShareBitLength);
+		mpz_mod_2exp(tb, tb, m_nShareBitLength);
+
+		if (mpz_cmp(ta, tb) == 0) {
+			std::cout << "MT is fine - i:" << i << "| " << ai << " " << bi << " " << ci << " . " << ai1 << " " << bi1 << " " << ci1 << std::endl;
+		} else {
+			std::cout << "Error in MT - i:" << i << "| " << ai << " " << bi << " " << ci << " . " << ai1 << " " << bi1 << " " << ci1 << std::endl;
+		}
+
+		//std::cout << (mpz_cmp(c1[i], a1[i]) == 0 ? "MT is fine." : "Error in MT!") << std::endl;
+	}
+	mpz_clears(ai, bi, ci, ai1, bi1, ci1, ta, tb, NULL);
+#endif
+
+	clock_gettime(CLOCK_MONOTONIC, &end);
+
+#if DJN_BENCH
+	printf("generating 2x %u MTs took %f\n", numMTs, getMillies(start, end));
+#endif
+
+//clean up after ourselves
+	for (uint32_t i = 0; i < packshares; i++) {
+		mpz_clears(a[i], b[i], c[i], a1[i], b1[i], c1[i], NULL);
+	}
+
+	mpz_clears(r, x, y, z, NULL);
+
+	free(abuf);
+	free(bbuf);
+	free(zbuf);
+}
+
+
+void DJNParty::computeSIPArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1, BYTE * bB1, BYTE * bC1, uint32_t numMTs, channel* chan) {
+	struct timespec start, end;
+	numMTs = ceil_divide(numMTs, 2); // We can be both sender and receiver at the same time.
+	
+
 	//std::ofstream send_out;
 	//send_out.open("ceshi.txt", std::ios::out | std::ios::app);
 	
 
 	//向量长度
 	uint32_t packshares = numMTs * 5;
-	
 	//每个值的bytes 
 	uint32_t shareBytes = m_nShareBitLength / 8;
 	//窗口大小为65536，每一次最多能分享多少bytes
@@ -104,18 +341,12 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 
 	uint32_t limit = maxPackSharehNumber;
 	uint32_t offset = 0;
+	
 	//随机数范围
 	uint64_t randomMax = 0;
-
-	//randomMax最大时64位，防止超出范围
-	if(m_nShareBitLength == 64){
-		randomMax = 18446744073709551615;
-	}
-	else{
-		randomMax = pow(2, m_nShareBitLength)- 1;
-	}
+	randomMax = pow(2, m_nShareBitLength)- 1;
 	
-    //std::cout << m_nShareBitLength << " A  " << randomMax << std::endl;
+	//随机数初始化
 	std::default_random_engine random(time(NULL));
     std::uniform_int_distribution<int> rand(0, randomMax);
 
@@ -128,8 +359,8 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 
 	
 	mpz_t c[packshares];
-	//mpz_t a1[packshares];
-	//mpz_t b1[packshares];
+	mpz_t a1[packshares];
+	mpz_t b1[packshares];
 	//mpz_t c1[packshares];
 
 	mpz_t X[packshares];
@@ -141,7 +372,7 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 	mpz_t V[packshares];
 
 	for (uint32_t i = 0; i < packshares; i++) {
-		mpz_inits(c[i], U[i], V[i], X[i], Y[i], NULL);
+		mpz_inits(c[i], a1[i], b1[i],  U[i], V[i], X[i], Y[i], NULL);
 	}
 
 	BYTE * rbuf = (BYTE*) calloc(packshares * shareBytes, 1);
@@ -162,6 +393,7 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 
 	//初始话向量X 每5个值为一组
 	for (uint32_t i = 0; i < numMTs; i++) {
+
 		mpz_import(x, 1, 1, shareBytes, 0, 0, bA + i * shareBytes);
 		mpz_import(y, 1, 1, shareBytes, 0, 0, bB + i * shareBytes);
 		
@@ -180,9 +412,6 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 		mpz_set(X[i*5+3], x4);
 		mpz_set(X[i*5+4], x5);
 
-		//std::cout << "A  " << x << "B: " << y  << std::endl;
-		//send_out << "A  " << x << "B: " << y  << std::endl;
-
 	}
 	
 	//随机数r 为了使在环内有逆 必须为奇数
@@ -191,12 +420,10 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 	{
 		temp = rand(random);
 	}
-	//uint32_t temp = 16470969;
+	
 	mpz_set_ui(rr, temp);
 	//mpz_set_ui(rr, 49853);
-
-	//std::cout << "rr = " << rr << std::endl;
-
+	//uint32_t temp = 16470969;
 
 
 	//初始化向量R，W是一组随机数 加入缓存区
@@ -206,51 +433,37 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 		mpz_set_ui (r, rand(random));
 		mpz_mod_2exp(r, r, m_nShareBitLength);
 		//mpz_set(R[i], r);
+		mpz_export(rbuf + i * shareBytes, NULL, -1, 1, 1, 0, r);
+
 		mpz_sub(z, X[i], r);
 		mpz_mod_2exp(z, z, m_nShareBitLength);
 		//mpz_set(Z[i], z);
-		mpz_export(rbuf + i * shareBytes, NULL, -1, 1, 1, 0, r);
-		//std::cout << " R  " << r << " Z: " << z  << std::endl;
-		//send_out  << " rr " << rr << " W: " << w  << std::endl;
-
 		mpz_mul(w, rr, z);
 		mpz_mod_2exp(w, w, m_nShareBitLength);
 		//mpz_set(W[i], w);
 		mpz_export(wbuf + i * shareBytes, NULL, -1, 1, 1, 0, w);
 
-		//std::cout << "rr  " << rr << "W: " << w  << std::endl;
-		//send_out  << "rr  " << rr << "W: " << w  << std::endl;
-
 	}
 
-
-	//for(uint32_t i = 0; i < packshares; i++) {
-		
-		
-		//std::cout << "rr  " << rr << "W: " << w  << std::endl;
-		//std::cout << "fasong R  " << R[i] << "fasong W: " << W[i]  << std::endl;
-	
-	
-
-	//}
 
 	//初始化向量Y(a1b1,a1,b1,1,c1)，初始化c1
 	//原c1没有赋值 ，得重新写一组随机值进去
 	offset = 0;
 	for(uint32_t i = 0; i < numMTs; i++) {
+
 		//取值初始化向量Y（a1b1，a1，b1，1,c1）
-		mpz_import(x, 1, 1, shareBytes, 0, 0, bA1 + offset);
-		mpz_import(y, 1, 1, shareBytes, 0, 0, bB1 + offset);
+		mpz_import(a1[i], 1, 1, shareBytes, 0, 0, bA1 + offset);
+		mpz_import(b1[i], 1, 1, shareBytes, 0, 0, bB1 + offset);
 
 		mpz_set_ui (z, rand(random));
 		mpz_mod_2exp(z, z, m_nShareBitLength);
 		//mpz_set(c1[i], z);  
 		mpz_export(bC1 + offset, NULL, 1, shareBytes, 0, 0, z);
 
-		mpz_mul(y1, x, y);
+		mpz_mul(y1, a1[i], b1[i]);
 		mpz_mod_2exp(y1, y1, m_nShareBitLength);
-		mpz_set(y2, x);
-		mpz_set(y3, y);
+		mpz_set(y2, a1[i]);
+		mpz_set(y3, b1[i]);
 		mpz_set_ui(y4, 1);
 		mpz_mod_2exp(y4, y4, m_nShareBitLength);
 		mpz_set(y5, z);
@@ -261,11 +474,9 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 		mpz_set(Y[i*5+3], y4);
 		mpz_set(Y[i*5+4], y5);
 
-		//std::cout << "A1  " << x << "B1: " << y << "C1: " << z  << std::endl;
-		//send_out  << "A1  " << a1[i] << "B1: " << b1[i] << "C1: " << z  << std::endl;
-
 		offset += shareBytes;
 	}
+
 
 	//发送/接收（R，W）
 	int window = DJN_WINDOWSIZE;
@@ -287,26 +498,18 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 	}
 
 
-
-
 	//处理接收（R，W），并计算U，V
 	offset = 0;
 	for (uint32_t i = 0; i < numpacks; i++) {
 
-		//最后一包的大小
 		if (i == numpacks - 1) {
 			limit = packshares %  maxPackSharehNumber ; 
-		
 		}
 	
 		for (uint32_t j = 0; j < limit; j++) {
 			
 			mpz_import(r, shareBytes, -1, 1, 1, 0, rbuf + (j + i * maxPackSharehNumber) * shareBytes);
 			mpz_import(w, shareBytes, -1, 1, 1, 0, wbuf + (j + i * maxPackSharehNumber) * shareBytes);
-			
-			//send_out  << "jieshou r  " << r << "jiehsou w: " << w  << std::endl;
-			//std::cout << "jieshou r  " << r << "jiehsou w: " << w  << std::endl;
-		
 			
 			mpz_mul(u, Y[j + i * maxPackSharehNumber], r);
 			mpz_mul(v, Y[j + i * maxPackSharehNumber], w);
@@ -317,15 +520,12 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 			mpz_set(U[j + i * maxPackSharehNumber], u);
 			mpz_set(V[j + i * maxPackSharehNumber], v);
 			
-			//std::cout << "r  " << r << "w: " << w  << std::endl;
-			//std::cout << "u  " << u << "v: " << v  << std::endl;
-			
 			offset += shareBytes;
 		}
 
 	}
 
-	//将每组U，V加起来变成u，v加入到缓存区
+	//将每组U，V加起来变成u，v并加入到缓存区
 	for(uint32_t i = 0; i < packshares; i = i + 5) {
 		
 		mpz_set(u, U[i]);
@@ -345,10 +545,6 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 		mpz_mod_2exp(v, v, m_nShareBitLength);
 
 		mpz_export(vbuf + i / 5 * shareBytes, NULL, -1, 1, 1, 0, v);
-
-		
-		//std::cout << "fasong u  " << u << "fasong v: " << v  << std::endl;
-		//send_out  << "fasong u  " << u << "fasong v: " << v  << std::endl;
 
 	}
 
@@ -374,35 +570,27 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 	mpz_set_ui(mod, randomMax + 1);
 	mpz_invert (rr , rr, mod);
 
-	//std::cout << "rr -1 = " << rr << std::endl;
-
 	//接收处理u，v，并计算c0
 	offset = 0;
 	limit = maxPackSharehNumber;
 	for (uint32_t i = 0; i < numpacks; i++) {
-		//最后一包的大小
+
 		if (i == numpacks - 1) {
-			limit = numMTs %  maxPackSharehNumber ; // if last package, only fill buffers to requested size and discard remaining shares
+			limit = numMTs %  maxPackSharehNumber ; 
 		}
 		
-		//read shares from client byte arrays
 		for (uint32_t j = 0; j < limit; j++) {
 
 			mpz_import(u, shareBytes, -1, 1, 1, 0, ubuf + (j + i * maxPackSharehNumber) * shareBytes);
 			mpz_import(v, shareBytes, -1, 1, 1, 0, vbuf + (j + i * maxPackSharehNumber) * shareBytes);
 
-			//std::cout << "jieshou u: " << u << "jieshou v: " << v << std::endl;
-	
+			//计算c0
 			mpz_mul(c[j + i * maxPackSharehNumber], rr, v);
-
 			mpz_add(c[j + i * maxPackSharehNumber], c[j + i * maxPackSharehNumber], u);
-
 			mpz_mod_2exp(c[j + i * maxPackSharehNumber], c[j + i * maxPackSharehNumber], m_nShareBitLength);
 
-			//std::cout << "u: " << u << "v: " << v << " rr: " << rr << " c  " << c[j + i * maxPackSharehNumber] << std::endl;
-			//send_out  << "u: " << u << "v: " << v << " rr: " << rr << " c  " << c[j + i * maxPackSharehNumber] << std::endl;
-
 			mpz_export(bC + offset, NULL, 1, shareBytes, 0, 0, c[j + i * maxPackSharehNumber]);
+
 			offset += shareBytes;
 			
 		}
@@ -458,7 +646,7 @@ void DJNParty::computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1,
 
 //clean up after ourselves
 	for (uint32_t i = 0; i < packshares; i++) {
-		mpz_clears(c[i], U[i], V[i], X[i], Y[i],  NULL);
+		mpz_clears(c[i], a1[i], b1[i], U[i], V[i], X[i], Y[i],  NULL);
 	}
 
 	mpz_clears(r, x, y, z, w, rr, u, v, mod, NULL);

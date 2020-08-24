@@ -51,7 +51,7 @@ BOOL ABYSetup::Init() {
 	}
 
 	//the bit length of the DJN party is irrelevant here, since it is set for each MT Gen task independently
-	if (m_eMTGenAlg == MT_PAILLIER) {
+	if (m_eMTGenAlg == MT_PAILLIER || m_eMTGenAlg == MT_SIP) {
 #ifndef BATCH
 		std::cout << "Creating new DJNPart with key bitlen = " << m_cCrypt->get_seclvl().ifcbits << std::endl;
 #endif
@@ -190,7 +190,8 @@ BOOL ABYSetup::PrepareSetupPhase(comm_ctx* comm) {
 	WakeupWorkerThreads(e_NP);
 	BOOL success = WaitWorkerThreads();
 
-	if (m_eMTGenAlg == MT_PAILLIER) {
+	// todo
+	if (m_eMTGenAlg == MT_PAILLIER || m_eMTGenAlg == MT_SIP) {
 		//Start Paillier key generation for the MT generation
 		m_cPaillierMTGen->keyExchange(m_tSetupChan);
 	}
@@ -211,6 +212,10 @@ BOOL ABYSetup::PerformSetupPhase() {
 	if (m_eMTGenAlg == MT_PAILLIER) {
 		//Start Paillier MT generation
 		WakeupWorkerThreads(e_MTPaillier);
+		success &= WaitWorkerThreads();
+		
+	}else if(m_eMTGenAlg == MT_SIP){
+		WakeupWorkerThreads(e_MTSIP);
 		success &= WaitWorkerThreads();
 	}
 	else if (m_eMTGenAlg == MT_DGK) {
@@ -445,6 +450,53 @@ BOOL ABYSetup::ThreadRunPaillierMTGen(uint32_t threadid) {
 	return true;
 }
 
+BOOL ABYSetup::ThreadRunInnerproductMTGen(uint32_t threadid) {
+	uint32_t nthreads = 2 * m_nNumOTThreads;
+
+	channel* djnchan = new channel(DJN_CHANNEL + threadid, m_tComm->rcv_std.get(), m_tComm->snd_std.get());
+
+	for (uint32_t i = 0; i < m_vPKMTGenTasks.size(); i++) {
+		PKMTGenVals* ptask = m_vPKMTGenTasks[i];
+
+		// equally distribute MTs to threads. Number of MTs per thread must be multiple of 2.
+		uint32_t nummtsperthread = ptask->numMTs / (nthreads * 2);
+		uint32_t threadmod = ptask->numMTs % (nthreads * 2);
+		uint32_t mynummts = (nummtsperthread + ((threadid * 2) < threadmod)) * 2;
+
+		uint32_t sharebytelen = ceil_divide(ptask->sharebitlen, 8);
+		if (mynummts > 0) {
+			uint32_t mystartpos = 0;
+
+			// add up previous threads numMTs to find start index for this thread
+			for (uint32_t t = 0; t < threadid; ++t) {
+				mystartpos += (nummtsperthread + ((t * 2) < threadmod)) * 2;
+			}
+			mystartpos *= sharebytelen;
+
+			//add an offset depending on the role of the party
+			uint32_t roleoffset = mystartpos + sharebytelen * (mynummts / 2);
+
+			m_cPaillierMTGen->setShareBitLength(ptask->sharebitlen);
+
+			if (m_eRole == SERVER) {
+				m_cPaillierMTGen->computeSIPArithmeticMTs(
+					ptask->A->GetArr() + mystartpos, ptask->B->GetArr() + mystartpos, ptask->C->GetArr() + mystartpos,
+					ptask->A->GetArr() + roleoffset, ptask->B->GetArr() + roleoffset, ptask->C->GetArr() + roleoffset,
+					mynummts, djnchan);
+			} else {
+				m_cPaillierMTGen->computeSIPArithmeticMTs(
+					ptask->A->GetArr() + roleoffset, ptask->B->GetArr() + roleoffset, ptask->C->GetArr() + roleoffset,
+					ptask->A->GetArr() + mystartpos, ptask->B->GetArr() + mystartpos, ptask->C->GetArr() + mystartpos,
+					mynummts, djnchan);
+			}
+		}
+	}
+	djnchan->synchronize_end();
+	delete djnchan;
+
+	return true;
+}
+
 BOOL ABYSetup::ThreadRunDGKMTGen(uint32_t threadid) {
 	uint32_t nthreads = 2 * m_nNumOTThreads;
 
@@ -529,8 +581,8 @@ BOOL ABYSetup::WakeupWorkerThreads(EJobType e) {
 	m_bWorkerThreadSuccess = TRUE;
 
 	m_nWorkingThreads = 2;
-
-	if (e == e_MTPaillier || e == e_MTDGK) {
+	//todo
+	if (e == e_MTPaillier || e == e_MTDGK || e == e_MTSIP) {
 		m_nWorkingThreads = 2 * m_nNumOTThreads;
 	} else if (e == e_Send || e == e_Receive) {
 		m_nWorkingThreads = 1;
@@ -610,6 +662,9 @@ void ABYSetup::CWorkerThread::ThreadMain() {
 			break;
 		case e_MTPaillier:
 			bSuccess = m_pCallback->ThreadRunPaillierMTGen(threadid);
+			break;
+		case e_MTSIP:
+			bSuccess = m_pCallback->ThreadRunInnerproductMTGen(threadid);
 			break;
 		case e_MTDGK:
 			bSuccess = m_pCallback->ThreadRunDGKMTGen(threadid);

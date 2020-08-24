@@ -574,13 +574,14 @@ void BoolSharing::ComputeMTs() {
 	}
 
 }
-
+//int a1=0, a2=0, a3=0, a4=0, a5=0, a6=0, a7=0, a8=0, a9=0, a10=0;
 void BoolSharing::EvaluateLocalOperations(uint32_t depth) {
 	std::deque<uint32_t> localops = m_cBoolCircuit->GetLocalQueueOnLvl(depth);
 	GATE* gate;
 #ifdef BENCHBOOLTIME
 	timespec tstart, tend;
 #endif
+//	int a1=0, a2=0, a3=0, a4=0, a5=0, a6=0, a7=0, a8=0, a9=0, a10=0;
 	for (uint32_t i = 0; i < localops.size(); i++) {
 		gate = &(m_vGates[localops[i]]);
 
@@ -635,8 +636,11 @@ void BoolSharing::EvaluateLocalOperations(uint32_t depth) {
 			break;
 		}
 	}
+
+	//std::cout << " G_LIN: " << a1 << " G_CONSTANT: " << a2 << " G_INV " << a3 << " G_CONV " << a4 << " G_SHARED_OUT " << a5 << " G_SHARED_IN " << a6 << " G_CALLBACK " << a7 << " G_PRINT_VAL " << a8 << " G_ASSERT " << a9 << " default " << a10 << std::endl;
 }
 
+//int b1=0, b2=0, b3=0, b4=0, b5=0, b6=0, b7=0, b8=0, b9=0, b10=0;
 void BoolSharing::EvaluateInteractiveOperations(uint32_t depth) {
 	std::deque<uint32_t> interactiveops = m_cBoolCircuit->GetInteractiveQueueOnLvl(depth);
 
@@ -649,9 +653,11 @@ void BoolSharing::EvaluateInteractiveOperations(uint32_t depth) {
 		switch (gate->type) {
 		case G_NON_LIN:
 			SelectiveOpen(interactiveops[i]);
+			//b1++;
 			break;
 		case G_NON_LIN_VEC:
 			SelectiveOpenVec(interactiveops[i]);
+			//b2++;
 			break;
 		case G_IN:
 			if (gate->gs.ishare.src == m_eRole) {
@@ -660,6 +666,7 @@ void BoolSharing::EvaluateInteractiveOperations(uint32_t depth) {
 				m_vInputShareGates.push_back(interactiveops[i]);
 				m_nInputShareRcvSize += gate->nvals;
 			}
+			//b3++;
 			break;
 		case G_OUT:
 			if (gate->gs.oshare.dst == m_eRole) {
@@ -672,19 +679,24 @@ void BoolSharing::EvaluateInteractiveOperations(uint32_t depth) {
 			} else {
 				ReconstructValue(interactiveops[i]);
 			}
+			//b4++;
 			break;
 		case G_TT:
 			SelectiveOpenOPLUT(interactiveops[i]);
+			//b5++;
 			break;
 		case G_CALLBACK:
 			EvaluateCallbackGate(interactiveops[i]);
+			//b6++;
 			break;
 		default:
 			std::cerr << "Boolsharing: Interactive Operation not recognized: " << (uint32_t) gate->type
 				<< " (" << get_gate_type_name(gate->type) << "), stopping execution" << std::endl;
 			std::exit(EXIT_FAILURE);
+			//b7++;
 		}
 	}
+	//std::cout << " G_NON_LIN: " << b1 << " G_NON_LIN_VEC: " << b2 << " G_IN " << b3 << " G_OUT " << b4 << " G_TT " << b5 << " G_CALLBACK " << b6 << " default "  << b7 <<  std::endl;
 }
 
 inline void BoolSharing::EvaluateXORGate(uint32_t gateid) {

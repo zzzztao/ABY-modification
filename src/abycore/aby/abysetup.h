@@ -165,6 +165,7 @@ private:
 	BOOL ThreadReceiveData();
 
 	BOOL ThreadRunPaillierMTGen(uint32_t threadid);
+	BOOL ThreadRunInnerproductMTGen(uint32_t threadid);
 	BOOL ThreadRunDGKMTGen(uint32_t threadid);
 
 	// IKNP OTTask values
@@ -202,7 +203,7 @@ private:
 	/* Thread information */
 
 	enum EJobType {
-		e_IKNPOTExt, e_KKOTExt, e_NP, e_Send, e_Receive, e_Transmit, e_Stop, e_MTPaillier, e_MTDGK, e_Undefined
+		e_IKNPOTExt, e_KKOTExt, e_NP, e_Send, e_Receive, e_Transmit, e_Stop, e_MTPaillier, e_MTDGK, e_Undefined, e_MTSIP
 	};
 
 	BOOL WakeupWorkerThreads(EJobType);

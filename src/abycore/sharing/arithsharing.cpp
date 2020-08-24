@@ -77,9 +77,9 @@ void ArithSharing<T>::PrepareSetupPhase(ABYSetup* setup) {
 	m_nMTs = m_cArithCircuit->GetNumMULGates();
 
 	InitMTs();
-
+	// todo
 	if (m_nMTs > 0) {
-		if (m_eMTGenAlg == MT_PAILLIER || m_eMTGenAlg == MT_DGK) {
+		if (m_eMTGenAlg == MT_PAILLIER || m_eMTGenAlg == MT_DGK || m_eMTGenAlg == MT_SIP) {
 			PKMTGenVals* pgentask = (PKMTGenVals*) malloc(sizeof(PKMTGenVals));
 			pgentask->A = &(m_vA[0]);
 			pgentask->B = &(m_vB[0]);

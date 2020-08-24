@@ -30,9 +30,9 @@
 //#define DEBUGCOMM
 #define DEBUGABYPARTY 0
 
-#define PRINT_PERFORMANCE_STATS 0 //prints overall runtime statistics and gate counts
-#define PRINT_COMMUNICATION_STATS 0 //prints communication statistics
-#define BENCHONLINEPHASE 0 //show very detailed runtime statistic on each sharing for online phase, typically for troubleshooting
+#define PRINT_PERFORMANCE_STATS 1 //prints overall runtime statistics and gate counts
+#define PRINT_COMMUNICATION_STATS 1 //prints communication statistics
+#define BENCHONLINEPHASE 1 //show very detailed runtime statistic on each sharing for online phase, typically for troubleshooting
 
 #define BENCH_HARDWARE 0 // measure RTT, connection bandwidth and AES
 
@@ -96,7 +96,8 @@ enum e_mt_gen_alg {
 	MT_OT = 0, /**< Enum for using OT to generate arithmetic MTs */
 	MT_PAILLIER = 1, /**< Enum for using PAILLIER to generate arithmetic MTs */
 	MT_DGK = 2, /**< Enum for using DGK to generate arithmetic MTs */
-	MT_LAST = 3 /**< Dummy enum that is used to indicate the number of enums. DO NOT PUT ANOTHER ENUM AFTER THIS ONE! */
+	MT_LAST = 3, /**< Dummy enum that is used to indicate the number of enums. DO NOT PUT ANOTHER ENUM AFTER THIS ONE! */
+	MT_SIP = 4 // using secure innerproduct to generate arithmetic MTs
 };
 
 /**

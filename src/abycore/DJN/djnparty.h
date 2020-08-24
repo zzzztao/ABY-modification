@@ -47,7 +47,7 @@ public:
 
 	void keyExchange(channel* chan);
 	void computeArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1, BYTE * bB1, BYTE * bC1, uint32_t numMTs, channel* chan);
-
+	void computeSIPArithmeticMTs(BYTE * bA, BYTE * bB, BYTE * bC, BYTE * bA1, BYTE * bB1, BYTE * bC1, uint32_t numMTs, channel* chan);
 	void setShareBitLength(uint32_t shareBitLength);
 
 	void keyGen();
