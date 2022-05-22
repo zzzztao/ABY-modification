@@ -1,6 +1,6 @@
 # ABY_TEST
 
-本实验仅用于学术研究，不能保证其没有问题！
+本实验仅用于学术研究，不能保证工业上其没有问题！
 
 
 
@@ -20,7 +20,7 @@ in [Network and Distributed System Security Symposium (NDSS'15)](http://www.inte
 对已有框架做了些修改，添加了全新乘法三元组协商协议、e的指数计算、牛顿除法计算等、封装了激励函数等方法
 
 1. 修改了乘法三元组协议（done）
-2. 实现e^x计算 效率低 有优化空间 （done）
+2. 实现e^x计算 （done）
 3. 使用高效的乘法与加法去逼近小数除法 （done）
 4. 做一些激励函数的封装（done）
 
